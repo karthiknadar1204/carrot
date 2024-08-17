@@ -24,9 +24,16 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import SocialMediaLinks from "@/components/social-links";
+import * as cocossd from '@tensorflow-models/coco-ssd'
+import "@tensorflow/tfjs-backend-cpu"
+import "@tensorflow/tfjs-backend-webgl"
+import { DetectedObject, ObjectDetection } from '@tensorflow-models/coco-ssd';
+import { drawOnCanvas } from '@/utils/draw';
+
 
 type Props = {};
 
+let interval: any = null;
 const Page = (props: Props) => {
   const webcamRef = useRef<Webcam>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -37,6 +44,7 @@ const Page = (props: Props) => {
   const [volume, setVolume] = useState(0.8);
   const [loading, setLoading] = useState<boolean>(false);
   const [cameraOn, setCameraOn] = useState<boolean>(true);
+  const [model, setModel] = useState<ObjectDetection>();
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   let stopTimeout: any = null;
@@ -68,7 +76,6 @@ const Page = (props: Props) => {
     }
 
     return () => {
-      // Clean up the media recorder and stream
       mediaRecorderRef.current?.stop();
       stopTimeout && clearTimeout(stopTimeout);
     };
@@ -113,7 +120,7 @@ const Page = (props: Props) => {
   function userPromptRecord() {
     if (!cameraOn) {
       setCameraOn(true);
-      setTimeout(() => startRecording(true), 500); // Delay to allow camera to turn on
+      setTimeout(() => startRecording(true), 500);
     } else {
       if (!webcamRef.current) {
         toast("Camera not found. Please refresh.");
@@ -164,6 +171,73 @@ const Page = (props: Props) => {
     }
     return new Blob(byteArrays, { type: contentType });
   }
+
+  useEffect(() => {
+    setLoading(true);
+    initModel();
+  }, [])
+
+
+  async function initModel() {
+    const loadedModel: ObjectDetection = await cocossd.load({
+      base: 'mobilenet_v2'
+    });
+    setModel(loadedModel);
+  }
+
+  useEffect(() => {
+    if (model) {
+      setLoading(false);
+    }
+  }, [model])
+
+  async function runPrediction() {
+    if (
+      model
+      && webcamRef.current
+      && webcamRef.current.video
+      && webcamRef.current.video.readyState === 4
+    ) {
+      const predictions: DetectedObject[] = await model.detect(webcamRef.current.video);
+
+      resizeCanvas(canvasRef, webcamRef);
+      drawOnCanvas(mirrored, predictions, canvasRef.current?.getContext('2d'))
+
+      console.log("predictions",predictions);
+
+      let isPerson: boolean = false;
+      if (predictions.length > 0) {
+        predictions.forEach((prediction) => {
+          isPerson = prediction.class === 'person';
+        })
+
+        if (isPerson && autoRecordEnabled) {
+          startRecording(true);
+        }
+      }
+    }
+  }
+
+
+  useEffect(() => {
+    interval = setInterval(() => {
+      runPrediction();
+    }, 100)
+
+    return () => clearInterval(interval);
+  }, [webcamRef.current, model, mirrored, autoRecordEnabled, runPrediction])
+
+  function resizeCanvas(canvasRef: React.RefObject<HTMLCanvasElement>, webcamRef: React.RefObject<Webcam>) {
+    const canvas = canvasRef.current;
+    const video = webcamRef.current?.video;
+  
+    if ((canvas && video)) {
+      const { videoWidth, videoHeight } = video;
+      canvas.width = videoWidth;
+      canvas.height = videoHeight;
+    }
+  }
+
 
   return (
     <div className="flex h-screen">
